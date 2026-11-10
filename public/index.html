@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Agent</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --panel: #ffffff; --text: #1c1c1a; --muted: #6d6d67; --line: #e4e4de;
+    --accent: #2f5bd3; --accent-soft: #e9eefc; --user: #2f5bd3; --user-text: #fff; --chip: #f0f0eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1d1d1b; --text: #ecece7; --muted: #9a9a93; --line: #31312d;
+      --accent: #84a2f2; --accent-soft: #242c44; --user: #3a5bbd; --user-text: #fff; --chip: #272724;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; }
+  aside { width: 260px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+  aside header { padding: 14px; border-bottom: 1px solid var(--line); }
+  #new { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+  #convos { overflow-y: auto; flex: 1; padding: 6px; }
+  .convo { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  .convo:hover, .convo.active { background: var(--chip); }
+  .convo small { display: block; color: var(--muted); font-size: 12px; }
+  .convo span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 24px 16px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
+  .empty h1 { color: var(--text); font-size: 22px; margin-bottom: 6px; }
+  .msg { margin: 0 0 22px; }
+  .msg .when { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .user { text-align: right; }
+  .user .bubble { display: inline-block; text-align: left; background: var(--user); color: var(--user-text); padding: 9px 14px; border-radius: 14px 14px 4px 14px; max-width: 85%; white-space: pre-wrap; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip { font-size: 12.5px; background: var(--chip); color: var(--muted); padding: 3px 9px; border-radius: 99px; }
+  .chip.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .answer p { margin: 0 0 10px; }
+  .answer ul, .answer ol { margin: 0 0 10px; padding-left: 22px; }
+  .answer h4 { margin: 14px 0 6px; font-size: 15px; }
+  .answer code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .answer table { border-collapse: collapse; margin: 0 0 12px; font-size: 14px; display: block; overflow-x: auto; }
+  .answer th, .answer td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+  .answer a.cite { font-size: 11px; vertical-align: super; text-decoration: none; background: var(--accent-soft); color: var(--accent); padding: 0 5px; border-radius: 6px; margin-left: 1px; }
+  .sources { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .sources a { font-size: 13px; color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sources a:hover { color: var(--accent); }
+  .sources b { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .error { color: #c0392b; }
+  form { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 16px; }
+  form .wrap { display: flex; gap: 8px; }
+  textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; background: var(--bg); color: var(--text); max-height: 160px; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.send { border: 0; border-radius: 10px; padding: 0 18px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.send:disabled { opacity: .5; cursor: wait; }
+  @media (max-width: 720px) { aside { display: none; } }
+</style>
+</head>
+<body>
+<aside>
+  <header><button id="new" type="button">+ New chat</button></header>
+  <div id="convos"></div>
+</aside>
+<main>
+  <div id="log"><div class="wrap" id="messages"></div></div>
+  <form id="form">
+    <div class="wrap">
+      <textarea id="input" rows="1" placeholder="Ask anything. I search the web and remember what we discuss." autofocus></textarea>
+      <button class="send" id="send">Send</button>
+    </div>
+  </form>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let conversationId = null;
+let busy = false;
+
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+// A small, safe markdown renderer: escape everything first, then add back a few formats.
+function inline(s, sources) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[(\d+)\]/g, (m, n) => {
+      const src = sources.find((x) => x.n === Number(n));
+      return src ? `<a class="cite" href="${esc(src.url)}" target="_blank" rel="noopener" title="${esc(src.title)}">${n}</a>` : m;
+    });
+}
+function markdown(text, sources = []) {
+  const lines = esc(text).split("\n");
+  let html = "", list = null, para = [], table = [];
+  const flushPara = () => { if (para.length) html += `<p>${inline(para.join("<br>"), sources)}</p>`; para = []; };
+  const flushList = () => { if (list) html += `</${list}>`; list = null; };
+  const flushTable = () => {
+    if (!table.length) return;
+    const rows = table.filter((r) => !/^\|?\s*:?-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim(), sources)));
+    html += "<table>" + rows.map((r, i) => `<tr>${r.map((c) => i === 0 ? `<th>${c}</th>` : `<td>${c}</td>`).join("")}</tr>`).join("") + "</table>";
+    table = [];
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith("|")) { flushPara(); flushList(); table.push(t); continue; }
+    flushTable();
+    let m;
+    if ((m = t.match(/^[-*] (.*)/))) { flushPara(); if (list !== "ul") { flushList(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1], sources)}</li>`; }
+    else if ((m = t.match(/^\d+[.)] (.*)/))) { flushPara(); if (list !== "ol") { flushList(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1], sources)}</li>`; }
+    else if ((m = t.match(/^#{1,4} (.*)/))) { flushPara(); flushList(); html += `<h4>${inline(m[1], sources)}</h4>`; }
+    else if (!t) { flushPara(); flushList(); }
+    else { flushList(); para.push(t); }
+  }
+  flushTable(); flushPara(); flushList();
+  return html;
+}
+
+function scrollDown() { $("log").scrollTop = $("log").scrollHeight; }
+
+function addUser(text, iso) {
+  const el = document.createElement("div");
+  el.className = "msg user";
+  el.innerHTML = `<div class="when">${fmt(iso)}</div><div class="bubble"></div>`;
+  el.querySelector(".bubble").textContent = text;
+  $("messages").appendChild(el);
+}
+
+function addAssistant(iso) {
+  const el = document.createElement("div");
+  el.className = "msg assistant";
+  el.innerHTML = `<div class="when">${iso ? fmt(iso) : ""}</div><div class="meta"></div><div class="answer"></div><div class="sources"></div>`;
+  $("messages").appendChild(el);
+  return el;
+}
+
+function renderSources(el, sources) {
+  el.querySelector(".sources").innerHTML = sources.map((s) =>
+    `<a href="${esc(s.url)}" target="_blank" rel="noopener"><b>${s.n}</b>${esc(s.title)}${s.published ? ` · ${esc(String(s.published).slice(0, 16))}` : ""}</a>`).join("");
+}
+
+function chip(el, text, live = false) {
+  const c = document.createElement("span");
+  c.className = "chip" + (live ? " live" : "");
+  c.textContent = text;
+  el.querySelector(".meta").appendChild(c);
+  return c;
+}
+
+function showEmpty() {
+  $("messages").innerHTML = `<div class="empty"><h1>What do you want to know?</h1>I search the web for anything current, and I remember what you asked and when.</div>`;
+}
+
+async function loadConversations() {
+  const list = await fetch("/api/conversations").then((r) => r.json());
+  $("convos").innerHTML = "";
+  for (const c of list) {
+    const b = document.createElement("button");
+    b.className = "convo" + (c.id === conversationId ? " active" : "");
+    b.innerHTML = `<span></span><small>${fmt(c.updatedAt)}</small>`;
+    b.querySelector("span").textContent = c.title;
+    b.onclick = () => openConversation(c.id);
+    $("convos").appendChild(b);
+  }
+}
+
+async function openConversation(id) {
+  if (busy) return;
+  const c = await fetch(`/api/conversations/${id}`).then((r) => r.json());
+  conversationId = c.id;
+  $("messages").innerHTML = "";
+  for (const m of c.messages) {
+    if (m.role === "user") addUser(m.text, m.createdAt);
+    else {
+      const el = addAssistant(m.createdAt);
+      el.querySelector(".answer").innerHTML = markdown(m.text, m.sources || []);
+      renderSources(el, m.sources || []);
+    }
+  }
+  loadConversations();
+  scrollDown();
+}
+
+async function send(text) {
+  busy = true;
+  $("send").disabled = true;
+  if ($("messages").querySelector(".empty")) $("messages").innerHTML = "";
+  addUser(text, new Date().toISOString());
+  const el = addAssistant(null);
+  const thinking = chip(el, "Thinking", true);
+  let answer = "", sources = [], searches = [];
+  scrollDown();
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId, message: text }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || "request failed");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buffer.indexOf("\n\n")) >= 0) {
+        const line = buffer.slice(0, i).replace(/^data: /, "");
+        buffer = buffer.slice(i + 2);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "conversation") conversationId = ev.conversationId;
+        else if (ev.type === "recall") {
+          for (const d of ev.dates) chip(el, d.found ? `Remembered ${d.label}` : `Nothing on ${d.label}`);
+          if (!ev.dates.length && ev.items.length) chip(el, `Remembered ${ev.items.length} earlier question${ev.items.length > 1 ? "s" : ""}`);
+        } else if (ev.type === "search") {
+          searches.push(ev.query);
+          thinking.textContent = `Searching: ${searches.slice(-3).join(" · ")}`;
+        } else if (ev.type === "token") {
+          if (thinking.isConnected) thinking.remove();
+          answer += ev.text;
+          el.querySelector(".answer").innerHTML = markdown(answer, sources);
+          scrollDown();
+        } else if (ev.type === "sources") {
+          sources = ev.sources;
+          el.querySelector(".answer").innerHTML = markdown(answer, sources);
+          renderSources(el, sources);
+        } else if (ev.type === "done") {
+          if (searches.length) chip(el, `${searches.length} search${searches.length > 1 ? "es" : ""}`);
+          el.querySelector(".when").textContent = fmt(new Date().toISOString());
+        } else if (ev.type === "error") {
+          el.querySelector(".answer").innerHTML = `<p class="error">${esc(ev.message)}</p>`;
+        }
+      }
+    }
+  } catch (e) {
+    el.querySelector(".answer").innerHTML = `<p class="error">${esc(e.message)}</p>`;
+  } finally {
+    if (thinking.isConnected) thinking.remove();
+    busy = false;
+    $("send").disabled = false;
+    $("input").focus();
+    scrollDown();
+    loadConversations();
+  }
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $("input").value.trim();
+  if (!text || busy) return;
+  $("input").value = "";
+  $("input").style.height = "";
+  send(text);
+});
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
+});
+$("input").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
+$("new").addEventListener("click", () => { if (busy) return; conversationId = null; showEmpty(); loadConversations(); $("input").focus(); });
+
+showEmpty();
+loadConversations();
+</script>
+</body>
+</html>
